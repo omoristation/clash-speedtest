@@ -14,7 +14,7 @@ Features:
 
 ```bash
 # 支持从源码安装，或从 Release 里下载由 Github Action 自动构建的二进制文件
-> go install github.com/faceair/clash-speedtest@latest
+> go install github.com/faceair/clash-speedtest
 
 # 查看帮助
 > clash-speedtest -h
@@ -63,6 +63,8 @@ Premium|广港|IEPL|05                        	3.87MB/s    	249.00ms
 # 筛选后的配置文件可以直接粘贴到 Clash/Mihomo 中使用，或是贴到 Github\Gist 上通过 Proxy Provider 引用。
 ```
 
+演示项目：[https://github.com/faceair/freesub](https://github.com/faceair/freesub) 通过 Github Action 使用本工具对免费订阅进行测速，并保存结果。
+
 ## 测速原理
 
 通过 HTTP GET 请求下载指定大小的文件，默认使用 https://speed.cloudflare.com (50MB) 进行测试，计算下载时间得到下载速度。
@@ -81,7 +83,7 @@ Cloudflare 是全球知名的 CDN 服务商，其提供的测速服务器到海�
 
 ```shell
 # 在您需要进行测速的服务器上安装和启动测速服务器
-> go install github.com/faceair/clash-speedtest/download-server@latest
+> go install github.com/faceair/clash-speedtest/download-server
 > download-server
 
 # 此时在本地使用 http://your-server-ip:8080 作为 server-url 即可

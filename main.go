@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json" //diy
 	"flag"
 	"fmt"
+	"io" //diy
+	"net/http" //diy
+	"net/url" //diy
 	"os"
 	"sort"
 	"time"
@@ -25,14 +29,28 @@ var (
 	outputPath        = flag.String("output", "", "output config file path")
 	maxLatency        = flag.Duration("max-latency", 800*time.Millisecond, "filter latency greater than this value")
 	minSpeed          = flag.Float64("min-speed", 5, "filter speed less than this value(unit: MB/s)")
+	noticeURL         = flag.String("notice-url", "", "通知url，前面是各种参数，通知内容放在最后") //diy
+	speedtestURL      = flag.String("speedtest-url", "", "图表url，前面是各种参数，通知内容放在最后") //diy
+	fastMode          = flag.Bool("fast", false, "快速测试模式，仅测试节点延迟") //diy
+	debug             = flag.Bool("debug", false, "显示测试输出，进度条等信息") //diy
 )
 
 const (
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorReset  = "\033[0m"
+	colorRed    = "" //"\033[31m" //diy 太傻了
+	colorGreen  = "" //"\033[32m"
+	colorYellow = "" //"\033[33m"
+	colorReset  = "" //"\033[0m"
 )
+
+var failureCount int //diy 失败次数
+var lastFailedTime time.Time //diy 最后一次失败时间
+var httpClient = &http.Client{ //diy HTTP客户端作为全局变量，避免每次都创建新的客户端
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns: 100,
+		IdleConnTimeout: 90 * time.Second,
+	},
+}
 
 func main() {
 	flag.Parse()
@@ -50,34 +68,190 @@ func main() {
 		UploadSize:   *uploadSize,
 		Timeout:      *timeout,
 		Concurrent:   *concurrent,
+		FastMode:     *fastMode, //diy
 	})
 
-	allProxies, err := speedTester.LoadProxies()
-	if err != nil {
-		log.Fatalln("load proxies failed: %v", err)
-	}
-
-	bar := progressbar.Default(int64(len(allProxies)), "测试中...")
-	results := make([]*speedtester.Result, 0)
-	speedTester.TestProxies(allProxies, func(result *speedtester.Result) {
-		bar.Add(1)
-		bar.Describe(result.ProxyName)
-		results = append(results, result)
-	})
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].DownloadSpeed > results[j].DownloadSpeed
-	})
-
-	printResults(results)
-
-	if *outputPath != "" {
-		err = saveConfig(results)
+	//diy 循环检测
+	for {
+		allProxies, err := speedTester.LoadProxies()
 		if err != nil {
-			log.Fatalln("save config file failed: %v", err)
+			log.Fatalln("load proxies failed: %v", err)
 		}
-		fmt.Printf("\nsave config file to: %s\n", *outputPath)
+		//bar := progressbar.Default(int64(len(allProxies)), "测试中...") //diy 修复进度条显示错乱，设置进度条合适的宽度
+		var bar *progressbar.ProgressBar
+		if *debug { //diy
+			bar = progressbar.NewOptions(int(len(allProxies)),
+				progressbar.OptionSetWidth(10),                // 设置进度条的宽度
+				progressbar.OptionShowIts(),                   // 显示百分比
+			)
+		}
+		results := make([]*speedtester.Result, 0)
+		speedTester.TestProxies(allProxies, func(result *speedtester.Result) {
+			if *debug { //diy
+				bar.Add(1)
+				bar.Describe(result.ProxyName)
+			}
+			results = append(results, result)
+		})
+
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].DownloadSpeed > results[j].DownloadSpeed
+		})
+
+		if *debug { //diy
+			printResults(results)
+		}
+
+		if *outputPath != "" {
+			err = saveConfig(results)
+			if err != nil {
+				log.Fatalln("save config file failed: %v", err)
+			}
+			fmt.Printf("\nsave config file to: %s\n", *outputPath)
+		}
+		
+		//发送部分 // 创建一个存储节点信息的结构体
+		var nodesData []map[string]string
+		// 收集失败的节点（根据故障标准）
+		var failedNodes []string
+		for _, result := range results {
+			if result.Latency == 0 || result.PacketLoss == 100 {
+				failedNodes = append(failedNodes, result.ProxyName)
+			}
+			//发送部分
+			var port string
+			if p, ok := result.ProxyConfig["port"].(int); ok {
+				port = fmt.Sprintf("%d", p) // 转换成字符串
+			}
+			nodesData = append(nodesData, map[string]string{
+				"port":      port,
+				"latency":   result.FormatLatency(),
+				//"node_name": result.ProxyName,
+			})
+		}
+		//发送部分 // 将节点信息转为JSON
+		jsonData, err := json.Marshal(nodesData)
+		if err != nil {
+			fmt.Printf("failed to marshal JSON data: %v", err)
+		}
+		// 调用函数发送 HTTP 请求
+		if *speedtestURL != "" {
+			if err := sendHttpRequest(*speedtestURL, string(jsonData)); err != nil {
+				fmt.Println("发送HTTP请求错误:", err)
+			} else {
+				if *debug {
+					fmt.Println("消息成功发送")
+				}
+			}
+		}
+		// 如果节点失败，发送消息 %0A 是换行
+		if len(failedNodes) > 0 {
+			content := fmt.Sprintf("节点监控 %d 个:", len(failedNodes))
+			for _, node := range failedNodes {
+				content += node + " "
+			}
+
+			// 如果消息发送间隔已过，且故障节点列表非空，则发送消息 相邻2条消息最小间隔10分钟
+			if time.Since(lastFailedTime) >= 10*time.Minute {
+				// 控制消息发送间隔
+				if failureCount >= 6 {
+					// 发送间隔1小时
+					content = "缓1时 " + content
+					failureCount = 0 // 重置失败次数
+					lastFailedTime = time.Now() // 设置1小时后再次发送消息.Add(time.Hour)
+				} else {
+					// 发送间隔10分钟
+					if failureCount != 0 {
+						content = "缓10分 " + content
+					}
+					failureCount++ // 增加连续失败次数
+					lastFailedTime = time.Now() // 设置10分钟后再次发送消息.Add(10 * time.Minute)
+				}
+				// 调用函数发送 HTTP 请求
+				if *noticeURL != "" {
+					if err := sendHttpRequest(*noticeURL, content); err != nil {
+						fmt.Println("发送HTTP请求错误:", err)
+					} else {
+						if *debug {
+							fmt.Println("消息成功发送")
+						}
+					}
+				}
+			}
+			if *debug {
+				fmt.Println("最后失败时间 ", lastFailedTime)
+			}
+		} else {
+			// 如果没有失败的节点，重置失败次数
+			failureCount = 0
+			if *debug {
+				fmt.Println("全部正常")
+			}
+		}
+		if *debug {
+			fmt.Println("当前时间 ", time.Now())
+			fmt.Println("累计失败次数 ", failureCount)
+			fmt.Println("休息5分钟,准备再次检测...")
+		}
+		time.Sleep(time.Minute * 5) // 等待下一个间隔 (5 分钟)
 	}
+}
+
+//将失败的节点列表发送消息
+func sendHttpRequest(urlinfo string, data string) error {
+	//流程：把URL的get转为post参数发送，避免 Cloudflare 对 URL 的最大长度限制
+	// 解析完整 URL
+	parsedURL, err := url.Parse(urlinfo)
+	if err != nil {
+		return fmt.Errorf("URL解析失败: %v", err)
+	}
+
+	// 获取基础 URL（不包含查询参数的部分）
+	baseURL := fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, parsedURL.Path)
+
+	// 获取所有查询参数
+	queryParams := parsedURL.Query()
+	
+	// 遍历查询参数并检查哪个参数为空 就用为空的参数名称作为消息name发送
+	for param, values := range queryParams {
+		// 如果值为空（即切片为空），则输出该参数名
+		if values[0] == "" {
+			// 添加 name和发送参数
+			//fmt.Println("参数名为空:", param)
+			queryParams.Set(param, data)
+		}
+	}
+
+	// 将查询参数转换为 POST 表单数据
+	formData := url.Values{}
+	for key, values := range queryParams {
+		if len(values) > 0 {
+			formData.Set(key, values[0])
+		}
+	}
+
+	// 发送 POST 请求
+	resp, err := httpClient.PostForm(baseURL, formData)
+	if err != nil {
+		return fmt.Errorf("未能发送请求: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 检查响应状态
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP 请求失败 状态: %v", resp.Status)
+	}
+
+	// 可以根据需要读取响应
+	if *debug {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("获取响应失败: %v", err)
+		}
+		fmt.Println(string(body))
+	}
+
+	return nil
 }
 
 func printResults(results []*speedtester.Result) {
