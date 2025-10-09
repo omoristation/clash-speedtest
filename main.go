@@ -151,22 +151,19 @@ func main() {
 				content += node + " "
 			}
 
-			// 如果消息发送间隔已过，且故障节点列表非空，则发送消息 相邻2条消息最小间隔10分钟
-			if time.Since(lastFailedTime) >= 10*time.Minute {
-				// 控制消息发送间隔
-				if failureCount >= 6 {
-					// 发送间隔1小时
-					content = "缓1时 " + content
-					failureCount = 0 // 重置失败次数
-					lastFailedTime = time.Now() // 设置1小时后再次发送消息.Add(time.Hour)
-				} else {
-					// 发送间隔10分钟
-					if failureCount != 0 {
-						content = "缓10分 " + content
-					}
-					failureCount++ // 增加连续失败次数
-					lastFailedTime = time.Now() // 设置10分钟后再次发送消息.Add(10 * time.Minute)
+			// 计算下一次允许发送的时间
+			var requiredInterval time.Duration
+			if failureCount >= 6 {
+				requiredInterval = 1 * time.Hour
+				content = "缓1时 " + content
+			} else {
+				requiredInterval = 10 * time.Minute
+				if failureCount > 0 { // 第一条消息不加前缀，后续消息加"缓10分"
+					content = "缓10分 " + content
 				}
+			}
+			// 检查是否达到发送间隔要求
+			if lastFailedTime.IsZero() || time.Since(lastFailedTime) >= requiredInterval { //IsZero检查是否首次发送
 				// 调用函数发送 HTTP 请求
 				if *noticeURL != "" {
 					if err := sendHttpRequest(*noticeURL, content); err != nil {
@@ -175,15 +172,20 @@ func main() {
 						if *debug {
 							fmt.Println("消息成功发送")
 						}
+						// 更新发送时间和计数
+						lastFailedTime = time.Now()
+						failureCount++
 					}
 				}
 			}
 			if *debug {
 				fmt.Println("最后失败时间 ", lastFailedTime)
+				fmt.Println("失败计数:", failureCount)
 			}
 		} else {
-			// 如果没有失败的节点，重置失败次数
+			// 无失败节点时重置计数器
 			failureCount = 0
+			lastFailedTime = time.Time{} // 重置时间
 			if *debug {
 				fmt.Println("全部正常")
 			}

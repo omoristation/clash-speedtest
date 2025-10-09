@@ -370,8 +370,14 @@ type latencyResult struct {
 }
 
 func (st *SpeedTester) testLatency(proxy constant.Proxy) *latencyResult {
+	// 创建 HTTP 客户端，启用 Keep-Alive 以复用连接
 	client := st.createClient(proxy)
-	const testCount = 2 //diy 延迟测试次数
+	//client.Timeout = 3000 * time.Millisecond // 功能重合了
+	// 禁用自动重定向 最好别重定向，会增加响应时间
+	//client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+	//	return http.ErrUseLastResponse
+	//}
+	const testCount = 5 //diy 延迟测试次数
 	latencies := make([]time.Duration, 0, testCount) //diy
 	failedPings := 0
 
@@ -379,7 +385,13 @@ func (st *SpeedTester) testLatency(proxy constant.Proxy) *latencyResult {
 		time.Sleep(100 * time.Millisecond)
 
 		start := time.Now()
-		resp, err := client.Get(fmt.Sprintf("%s/__down?bytes=0", st.config.ServerURL))
+		//resp, err := client.Get(fmt.Sprintf("%s/__down?bytes=0", st.config.ServerURL))
+		req, err := http.NewRequest("HEAD", st.config.ServerURL, nil) // 使用 HEAD 请求以减少响应体开销 只返回响应头，不返回响应体
+		if err != nil {
+			failedPings++
+			continue
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			failedPings++
 			continue
