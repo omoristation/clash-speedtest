@@ -280,12 +280,9 @@ func (st *SpeedTester) testProxy(name string, proxy *CProxy) *Result {
 	// 1. 首先进行延迟测试
 	latencyResult := st.testLatency(proxy)
 	result.Latency = latencyResult.avgLatency
+	result.Jitter = latencyResult.jitter //diy
+	result.PacketLoss = latencyResult.packetLoss //diy
 
-	// 如果是快速模式，只测试延迟，不测试抖动和丢包率 diy
-	if !st.config.FastMode {
-		result.Jitter = latencyResult.jitter
-		result.PacketLoss = latencyResult.packetLoss
-	}
 	// 如果是快速模式，只测试延迟，直接返回结果 diy
 	if st.config.FastMode {
 		return result
@@ -377,16 +374,22 @@ func (st *SpeedTester) testLatency(proxy constant.Proxy) *latencyResult {
 	//client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 	//	return http.ErrUseLastResponse
 	//}
-	const testCount = 5 //diy 延迟测试次数
+	// 预热：发一个HEAD请求，建立连接
+	warmupReq, _ := http.NewRequest("HEAD", st.config.ServerURL, nil)
+	warmupResp, _ := client.Do(warmupReq) // 忽略错误，只为热身
+	if warmupResp != nil {
+		warmupResp.Body.Close()
+	}
+	const testCount = 1 //diy 延迟测试次数
 	latencies := make([]time.Duration, 0, testCount) //diy
 	failedPings := 0
 
 	for i := 0; i < testCount; i++ { //diy
-		time.Sleep(100 * time.Millisecond)
+		//time.Sleep(100 * time.Millisecond) //注释或减到50ms，避免不必要等待
 
 		start := time.Now()
 		//resp, err := client.Get(fmt.Sprintf("%s/__down?bytes=0", st.config.ServerURL))
-		req, err := http.NewRequest("HEAD", st.config.ServerURL, nil) // 使用 HEAD 请求以减少响应体开销 只返回响应头，不返回响应体
+		req, err := http.NewRequest(http.MethodHead, st.config.ServerURL, nil) // 使用 HEAD 请求以减少响应体开销 只返回响应头，不返回响应体
 		if err != nil {
 			failedPings++
 			continue
@@ -477,6 +480,13 @@ func (st *SpeedTester) createClient(proxy constant.Proxy) *http.Client {
 					DstPort: u16Port,
 				})
 			},
+			MaxIdleConns:          100,   //diy 只需一个连接
+			IdleConnTimeout:       30 * time.Second, //diy
+			TLSHandshakeTimeout:   10 * time.Second, //diy
+			ExpectContinueTimeout: 1 * time.Second, //diy
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { //diy
+			return http.ErrUseLastResponse
 		},
 	}
 }
