@@ -31,6 +31,8 @@ var (
 	minSpeed          = flag.Float64("min-speed", 5, "filter speed less than this value(unit: MB/s)")
 	noticeURL         = flag.String("notice-url", "", "通知url，前面是各种参数，通知内容放在最后") //diy
 	speedtestURL      = flag.String("speedtest-url", "", "图表url，前面是各种参数，通知内容放在最后") //diy
+	testCount        = flag.Int("testcount", 1, "每个节点测试次数 默认1次")
+	maxRetries        = flag.Int("maxretries", 5, "不通后的最大重试次数 默认5次")
 	fastMode          = flag.Bool("fast", false, "快速测试模式，仅测试节点延迟") //diy
 	debug             = flag.Bool("debug", false, "显示测试输出，进度条等信息") //diy
 )
@@ -68,7 +70,10 @@ func main() {
 		UploadSize:   *uploadSize,
 		Timeout:      *timeout,
 		Concurrent:   *concurrent,
-		FastMode:     *fastMode, //diy
+		TestCount:    *testCount, //diy
+		MaxRetries:    *maxRetries, //diy
+		FastMode:     *fastMode, //diy 发送到 speedtester.go 的函数
+		Debug:     *debug, //diy
 	})
 
 	//diy 循环检测
