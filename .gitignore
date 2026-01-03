@@ -1,3 +1,4 @@
 .vscode
-clash-speedtest.yaml
+*.exe
 clash-speedtest.exe
+clash-speedtest.yaml
