@@ -38,7 +38,8 @@ var (
 	latencyURL         = flag.String("latency-url", "", "延迟测试url，http或者https的ip地址，尽量不用域名，可设1-2个用逗号分割") //diy
 	noticeURL         = flag.String("notice-url", "", "通知url，前面是各种参数，通知内容放在最后") //diy
 	speedtestURL      = flag.String("speedtest-url", "", "图表url，前面是各种参数，通知内容放在最后") //diy
-	testCount        = flag.Int("testcount", 1, "每个节点测试次数 默认1次")
+	testCount        = flag.Int("testcount", 1, "每个节点测试次数 默认1次") //diy
+	testRate        = flag.Int("testrate", 5, "测试频率 默认5分钟/次") //diy
 	maxRetries        = flag.Int("maxretries", 5, "不通后的最大重试次数 默认5次")
 	debug             = flag.Bool("debug", false, "显示测试输出，进度条等信息") //diy
 )
@@ -127,7 +128,11 @@ func main() {
 		}
 		//diy 统一处理上报和通知
 		handleNotifications(results)
-		time.Sleep(time.Minute * 5) // 等待下一个间隔 (5 分钟)
+		if testRate != nil {
+			time.Sleep(time.Minute * time.Duration(*testRate))
+		} else {
+			time.Sleep(time.Minute * 5) // 处理指针为空的情况，等待下一个间隔 (5 分钟)
+		}
 	}
 }
 
